@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>洛克异色 · 数据看板</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #F2EAD8; --card: #FBF7EC; --border: #DDD5C4;
+      --text: #1A1814; --muted: #675D53;
+      --orange: #C8830A; --green: #4B9C46; --dark: #2B2A2E;
+      --radius: 14px; --shadow: 0 2px 0 #C7B89A;
+    }
+    body { background: var(--bg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text); min-height: 100vh; }
+
+    /* Gate */
+    #gate {
+      position: fixed; inset: 0; z-index: 999; background: var(--dark);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    }
+    #gate h1 { color: #FBF7EC; font-size: 22px; font-weight: 900; }
+    #gate p  { color: rgba(251,247,236,0.5); font-size: 13px; }
+    #gate input {
+      width: 260px; padding: 12px 16px; border-radius: 10px;
+      border: 1.5px solid rgba(251,247,236,0.2); background: rgba(255,255,255,0.08);
+      color: #FBF7EC; font-size: 15px; outline: none; text-align: center;
+    }
+    #gate input:focus { border-color: var(--orange); }
+    #gate button {
+      width: 260px; padding: 12px; background: var(--orange); color: #FBF7EC;
+      border: none; border-radius: 10px; font-size: 15px; font-weight: 800; cursor: pointer;
+    }
+    #gate .err { color: #F56E6E; font-size: 12px; height: 16px; }
+
+    /* Header */
+    header {
+      background: var(--dark); color: #FBF7EC;
+      padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    header .title { font-size: 18px; font-weight: 900; letter-spacing: 0.5px; white-space: nowrap; }
+    header .sync  { font-size: 11px; color: rgba(251,247,236,0.45); white-space: nowrap; }
+    header .sync.ready { color: #7ED47A; }
+    header .sync.error { color: #F56E6E; }
+
+    /* Filter Bar */
+    .filter-bar {
+      background: var(--card); border-bottom: 1.5px solid var(--border);
+      padding: 12px 24px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .filter-bar label { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+    .quick-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+    .qbtn {
+      padding: 5px 12px; border-radius: 20px; border: 1.5px solid var(--border);
+      background: var(--bg); color: var(--muted);
+      font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit;
+      transition: all 0.12s;
+    }
+    .qbtn.active {
+      background: var(--dark); color: #FBF7EC; border-color: var(--dark);
+    }
+    .date-inputs { display: flex; align-items: center; gap: 6px; }
+    .date-inputs input[type=date] {
+      padding: 5px 10px; border-radius: 8px; border: 1.5px solid var(--border);
+      background: var(--bg); color: var(--text); font-size: 12px;
+      font-family: inherit; outline: none; cursor: pointer;
+    }
+    .date-inputs input[type=date]:focus { border-color: var(--orange); }
+    .date-inputs span { font-size: 12px; color: var(--muted); }
+    .filter-note { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+    /* Layout */
+    main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+    section { margin-bottom: 24px; }
+    section h2 {
+      font-size: 12px; font-weight: 800; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 10px;
+    }
+
+    /* Stat Cards */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .stat-card {
+      background: var(--card); border: 1.5px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px;
+    }
+    .stat-card .label { font-size: 11px; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
+    .stat-card .value { font-size: 30px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+    .stat-card .sub   { font-size: 10px; color: var(--muted); margin-top: 4px; }
+    .stat-card.orange .value { color: var(--orange); }
+    .stat-card.green  .value { color: var(--green); }
+    .stat-card.dark   .value { color: var(--dark); }
+
+    /* Charts */
+    .charts-row { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .charts-row { grid-template-columns: 1fr; } }
+    .chart-card {
+      background: var(--card); border: 1.5px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px;
+    }
+    .chart-card .chart-head {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+    }
+    .chart-card h3 { font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: 0.4px; }
+    .chart-toggle { display: flex; gap: 4px; }
+    .ctbtn {
+      padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--muted);
+      font-size: 10px; font-weight: 700; cursor: pointer; font-family: inherit;
+    }
+    .ctbtn.active { background: var(--dark); color: #FBF7EC; border-color: var(--dark); }
+
+    /* Leaderboards */
+    .lb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 10px; }
+    .lb-card {
+      background: var(--card); border: 1.5px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+    }
+    .lb-head { padding: 11px 14px; font-size: 12px; font-weight: 800; color: #FBF7EC; letter-spacing: 0.4px; }
+    .lb-card.orange .lb-head { background: var(--orange); }
+    .lb-card.green  .lb-head { background: var(--green); }
+    .lb-card.dark   .lb-head { background: var(--dark); }
+    .lb-note { font-size: 10px; opacity: 0.7; font-weight: 500; margin-left: 6px; }
+    .lb-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px;
+    }
+    .lb-row:last-child { border-bottom: none; }
+    .rank { font-size: 11px; font-weight: 900; color: var(--muted); width: 20px; flex-shrink: 0; text-align: center; }
+    .rank.top { color: var(--orange); font-size: 14px; }
+    .lname { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lval { font-weight: 900; font-size: 14px; flex-shrink: 0; }
+    .lunit { font-size: 10px; color: var(--muted); margin-left: 2px; }
+    .empty-tip { text-align: center; color: var(--muted); padding: 18px; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<!-- 密码门 -->
+<div id="gate">
+  <h1>🔐 数据看板</h1>
+  <p>仅管理员可访问</p>
+  <input id="pwd" type="password" placeholder="输入密码" autofocus>
+  <button onclick="checkPwd()">进入看板</button>
+  <div class="err" id="pErr"></div>
+</div>
+
+<!-- 主体 -->
+<div id="app" style="display:none">
+  <header>
+    <div class="title">洛克异色 · 数据看板</div>
+    <div class="sync" id="syncLabel">加载中…</div>
+  </header>
+
+  <!-- 日期筛选栏 -->
+  <div class="filter-bar">
+    <label>日期范围</label>
+    <div class="quick-btns">
+      <button class="qbtn" data-range="today"  onclick="setRange('today')">今天</button>
+      <button class="qbtn" data-range="7d"     onclick="setRange('7d')">近 7 天</button>
+      <button class="qbtn" data-range="30d"    onclick="setRange('30d')">近 30 天</button>
+      <button class="qbtn active" data-range="all" onclick="setRange('all')">全部</button>
+    </div>
+    <div class="date-inputs">
+      <input type="date" id="dateFrom" oninput="setRange('custom')">
+      <span>—</span>
+      <input type="date" id="dateTo" oninput="setRange('custom')">
+    </div>
+    <span class="filter-note" id="filterNote">全部数据</span>
+  </div>
+
+  <main>
+
+    <!-- 总览卡 -->
+    <section>
+      <h2>整体概览 <span id="rangeLabel" style="font-weight:500;text-transform:none;letter-spacing:0"></span></h2>
+      <div class="stat-grid">
+        <div class="stat-card dark">
+          <div class="label">总用户数</div>
+          <div class="value" id="s-total">—</div>
+          <div class="sub">全部累计注册</div>
+        </div>
+        <div class="stat-card orange">
+          <div class="label">新增用户</div>
+          <div class="value" id="s-new">—</div>
+          <div class="sub" id="s-new-sub">当期注册</div>
+        </div>
+        <div class="stat-card orange">
+          <div class="label">活跃用户</div>
+          <div class="value" id="s-active">—</div>
+          <div class="sub">当期活跃</div>
+        </div>
+        <div class="stat-card dark">
+          <div class="label">活跃用户破盾</div>
+          <div class="value" id="s-breaks">—</div>
+          <div class="sub">当期活跃用户累计</div>
+        </div>
+        <div class="stat-card green">
+          <div class="label">活跃用户异色</div>
+          <div class="value" id="s-yise">—</div>
+          <div class="sub">当期活跃用户累计</div>
+        </div>
+        <div class="stat-card green">
+          <div class="label">全局出货率</div>
+          <div class="value" id="s-rate">—</div>
+          <div class="sub">活跃用户破盾 / 异色</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 图表 -->
+    <section>
+      <h2>趋势 & 分布</h2>
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-head">
+            <h3 id="growthTitle">用户增长趋势</h3>
+            <div class="chart-toggle">
+              <button class="ctbtn active" id="ct-new"    onclick="switchChartMode('new')">新增</button>
+              <button class="ctbtn"        id="ct-active" onclick="switchChartMode('active')">日活</button>
+            </div>
+          </div>
+          <canvas id="growthChart" height="180"></canvas>
+        </div>
+        <div class="chart-card">
+          <div class="chart-head"><h3>平台分布</h3></div>
+          <canvas id="platformChart" height="180"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- 排行榜（始终全量，不受日期筛选影响） -->
+    <section>
+      <h2>排行榜 <span style="font-weight:500;text-transform:none;letter-spacing:0;font-size:11px">· 全量数据，不受日期筛选影响</span></h2>
+      <div class="lb-grid">
+        <div class="lb-card orange">
+          <div class="lb-head">🏆 异色收集榜 <span class="lb-note">Top 20</span></div>
+          <div id="lb-yise"><div class="empty-tip">加载中…</div></div>
+        </div>
+        <div class="lb-card dark">
+          <div class="lb-head">⚡ 最勤奋用户 · 破盾榜 <span class="lb-note">Top 20</span></div>
+          <div id="lb-breaks"><div class="empty-tip">加载中…</div></div>
+        </div>
+        <div class="lb-card green">
+          <div class="lb-head">🍀 出货率榜 <span class="lb-note">≥100次破盾</span></div>
+          <div id="lb-rate"><div class="empty-tip">加载中…</div></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+// ── 配置 ──────────────────────────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://gcjtgvlosykgjhyutbak.supabase.co';
+const SUPABASE_KEY  = 'sb_publishable_CaKAC_pzlSBJOlZMeaxwVg_jppWi69R';
+const DASHBOARD_PWD = 'luoke2025';
+
+// ── 密码 ──────────────────────────────────────────────────────────────────────
+function checkPwd() {
+  const v = document.getElementById('pwd').value.trim();
+  if (v === DASHBOARD_PWD) {
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('app').style.display  = 'block';
+    initDashboard();
+  } else {
+    document.getElementById('pErr').textContent = '密码错误，请重试';
+    document.getElementById('pwd').value = '';
+    document.getElementById('pwd').focus();
+  }
+}
+document.getElementById('pwd').addEventListener('keydown', e => { if (e.key === 'Enter') checkPwd(); });
+
+// ── Supabase ──────────────────────────────────────────────────────────────────
+const { createClient } = supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── 全局状态 ──────────────────────────────────────────────────────────────────
+let ALL_USERS = [];      // 全量数据（原始）
+let CHART_GROWTH = null; // Chart.js 实例
+let CHART_PLAT   = null;
+let CHART_MODE = 'new';  // 'new' | 'active'
+let DATE_FROM = null;    // Date | null
+let DATE_TO   = null;    // Date | null（含当天结束）
+
+// ── 工具 ──────────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmt = n => n == null ? '—' : Number(n).toLocaleString('zh-CN');
+const toDay = d => d instanceof Date ? d.toISOString().slice(0,10) : String(d).slice(0,10);
+const dayStr = s => s ? String(s).slice(0,10) : null;
+
+function getVal(user, key) {
+  const top = user[key]; if (top != null) return Number(top);
+  const j = user.data?.[key]; if (j != null) return Number(j);
+  return 0;
+}
+function getStr(user, key) { return user[key] ?? user.data?.[key] ?? null; }
+
+// ── 日期范围工具 ──────────────────────────────────────────────────────────────
+function getDayRange(rangeKey) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (rangeKey === 'today') return { from: today, to: today };
+  if (rangeKey === '7d')  { const f = new Date(today); f.setDate(f.getDate()-6); return { from: f, to: today }; }
+  if (rangeKey === '30d') { const f = new Date(today); f.setDate(f.getDate()-29); return { from: f, to: today }; }
+  return { from: null, to: null }; // all
+}
+
+function inRange(dateStr) {
+  if (!dateStr) return false;
+  const d = dayStr(dateStr);
+  if (DATE_FROM && d < toDay(DATE_FROM)) return false;
+  if (DATE_TO   && d > toDay(DATE_TO))   return false;
+  return true;
+}
+
+// 生成两个日期之间的所有日期字符串数组
+function genDays(from, to) {
+  const days = [];
+  const cur = new Date(from);
+  const end = new Date(to);
+  while (cur <= end) {
+    days.push(toDay(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return days;
+}
+
+// ── 筛选触发 ──────────────────────────────────────────────────────────────────
+let currentRange = 'all';
+
+function setRange(key) {
+  // 更新按钮激活态
+  document.querySelectorAll('.qbtn').forEach(b => {
+    b.classList.toggle('active', b.dataset.range === key);
+  });
+  currentRange = key;
+
+  if (key === 'custom') {
+    const fv = $('dateFrom').value;
+    const tv = $('dateTo').value;
+    DATE_FROM = fv ? new Date(fv) : null;
+    DATE_TO   = tv ? new Date(tv) : null;
+    // 取消快捷按钮激活
+    document.querySelectorAll('.qbtn').forEach(b => b.classList.remove('active'));
+  } else {
+    const { from, to } = getDayRange(key);
+    DATE_FROM = from; DATE_TO = to;
+    // 同步到 input
+    $('dateFrom').value = from ? toDay(from) : '';
+    $('dateTo').value   = to   ? toDay(to)   : '';
+  }
+
+  // 更新注释
+  const note = DATE_FROM && DATE_TO
+    ? `${toDay(DATE_FROM)} — ${toDay(DATE_TO)}`
+    : DATE_FROM ? `${toDay(DATE_FROM)} 起`
+    : '全部数据';
+  $('filterNote').textContent = note;
+  $('rangeLabel').textContent = DATE_FROM ? `· ${note}` : '';
+
+  if (ALL_USERS.length) renderAll();
+}
+
+// ── 初始化 ────────────────────────────────────────────────────────────────────
+async function initDashboard() {
+  const syncEl = $('syncLabel');
+  syncEl.textContent = '同步中…'; syncEl.className = 'sync';
+  try {
+    const { data: users, error } = await sb
+      .from('user_data')
+      .select('user_name, user_email, yise_count, total_breaks, platform, created_at, last_active_at, data')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    ALL_USERS = (users || []).map(u => ({
+      name:      getStr(u, 'user_name') || '匿名用户',
+      email:     u.user_email || '',
+      yise:      getVal(u, 'yise_count'),
+      breaks:    getVal(u, 'total_breaks'),
+      platform:  getStr(u, 'platform') || 'unknown',
+      createdAt: u.created_at,
+      activeAt:  u.last_active_at,
+    }));
+
+    renderAll();
+    renderLeaderboards();   // 排行榜全量，只渲染一次
+
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    syncEl.textContent = `已同步 ${now}`; syncEl.className = 'sync ready';
+  } catch (err) {
+    syncEl.textContent = '加载失败：' + err.message; syncEl.className = 'sync error';
+  }
+}
+
+// ── 全量渲染（随筛选变化） ────────────────────────────────────────────────────
+function renderAll() {
+  const newUsers    = ALL_USERS.filter(u => inRange(u.createdAt));
+  const activeUsers = ALL_USERS.filter(u => inRange(u.activeAt));
+
+  // 统计卡
+  const totalBreaks = activeUsers.reduce((s, u) => s + u.breaks, 0);
+  const totalYise   = activeUsers.reduce((s, u) => s + u.yise, 0);
+  const rate = totalBreaks > 0 ? (totalYise / totalBreaks * 100).toFixed(1) + '%' : '—';
+  $('s-total').textContent  = fmt(ALL_USERS.length);
+  $('s-new').textContent    = fmt(newUsers.length);
+  $('s-active').textContent = fmt(activeUsers.length);
+  $('s-breaks').textContent = fmt(totalBreaks);
+  $('s-yise').textContent   = fmt(totalYise);
+  $('s-rate').textContent   = rate;
+
+  // 图表
+  renderGrowthChart();
+  renderPlatformChart(activeUsers);
+}
+
+// ── 折线图 ────────────────────────────────────────────────────────────────────
+function switchChartMode(mode) {
+  CHART_MODE = mode;
+  $('ct-new').classList.toggle('active', mode === 'new');
+  $('ct-active').classList.toggle('active', mode === 'active');
+  renderGrowthChart();
+}
+
+function renderGrowthChart() {
+  // 计算显示区间
+  let from, to;
+  if (DATE_FROM && DATE_TO) { from = DATE_FROM; to = DATE_TO; }
+  else if (DATE_FROM)        { from = DATE_FROM; to = new Date(); }
+  else {
+    // 全量时显示近 60 天
+    to = new Date(); from = new Date(); from.setDate(to.getDate() - 59);
+  }
+
+  const days   = genDays(from, to);
+  const labels = days.map(d => d.slice(5)); // MM-DD
+  const counts = days.map(d => {
+    if (CHART_MODE === 'new') {
+      return ALL_USERS.filter(u => dayStr(u.createdAt) === d).length;
+    } else {
+      return ALL_USERS.filter(u => dayStr(u.activeAt) === d).length;
+    }
+  });
+
+  const color = CHART_MODE === 'new' ? '#C8830A' : '#4B9C46';
+  const bgCol = CHART_MODE === 'new' ? 'rgba(200,131,10,0.10)' : 'rgba(75,156,70,0.10)';
+  const label = CHART_MODE === 'new' ? '新增用户' : '日活用户';
+
+  $('growthTitle').textContent = CHART_MODE === 'new' ? '用户增长趋势' : '每日活跃趋势';
+
+  if (CHART_GROWTH) CHART_GROWTH.destroy();
+  CHART_GROWTH = new Chart($('growthChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label, data: counts,
+        borderColor: color, backgroundColor: bgCol,
+        borderWidth: 2, pointRadius: days.length <= 14 ? 4 : 2,
+        pointBackgroundColor: color, fill: true, tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          grid: { color: 'rgba(103,93,83,0.07)' },
+          ticks: {
+            font: { size: 10 }, color: '#675D53', maxRotation: 0,
+            callback: (_, i) => {
+              const step = Math.ceil(days.length / 10);
+              return i % step === 0 ? labels[i] : '';
+            }
+          },
+        },
+        y: {
+          grid: { color: 'rgba(103,93,83,0.07)' },
+          ticks: { font: { size: 10 }, color: '#675D53', precision: 0 },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+// ── 平台饼图 ──────────────────────────────────────────────────────────────────
+function renderPlatformChart(users) {
+  const mobile  = users.filter(u => u.platform === 'mobile').length;
+  const desktop = users.filter(u => u.platform === 'desktop').length;
+  const other   = users.length - mobile - desktop;
+  const labels  = ['手机', '电脑']; const data = [mobile, desktop];
+  if (other > 0) { labels.push('未知'); data.push(other); }
+
+  if (CHART_PLAT) CHART_PLAT.destroy();
+  CHART_PLAT = new Chart($('platformChart'), {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data, backgroundColor: ['#C8830A','#2B2A2E','#A09080'], borderColor: '#FBF7EC', borderWidth: 3 }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'bottom', labels: { font: { size: 12 }, color: '#675D53', padding: 12 } } },
+      cutout: '60%',
+    }
+  });
+}
+
+// ── 排行榜（全量，仅渲染一次） ────────────────────────────────────────────────
+function renderLeaderboards() {
+  const rankEmoji = i => i===0?'🥇':i===1?'🥈':i===2?'🥉':String(i+1);
+
+  function renderLb(elId, rows, getDisplay) {
+    const el = $(elId);
+    if (!rows.length) { el.innerHTML = '<div class="empty-tip">暂无数据</div>'; return; }
+    el.innerHTML = rows.map((u, i) => {
+      const { val, unit } = getDisplay(u);
+      return `<div class="lb-row">
+        <span class="rank ${i<3?'top':''}">${rankEmoji(i)}</span>
+        <span class="lname" title="${u.email||u.name}">${u.name}</span>
+        <span class="lval">${val}<span class="lunit">${unit}</span></span>
+      </div>`;
+    }).join('');
+  }
+
+  const byYise = [...ALL_USERS].filter(u=>u.yise>0).sort((a,b)=>b.yise-a.yise).slice(0,20);
+  renderLb('lb-yise', byYise, u => ({ val: fmt(u.yise), unit: '只' }));
+
+  const byBreaks = [...ALL_USERS].filter(u=>u.breaks>0).sort((a,b)=>b.breaks-a.breaks).slice(0,20);
+  renderLb('lb-breaks', byBreaks, u => ({ val: fmt(u.breaks), unit: '次' }));
+
+  const byRate = [...ALL_USERS]
+    .filter(u => u.breaks>=100 && u.yise>0)
+    .map(u => ({ ...u, rate: u.yise/u.breaks*100 }))
+    .sort((a,b) => b.rate-a.rate).slice(0,20);
+  renderLb('lb-rate', byRate, u => ({ val: u.rate.toFixed(1)+'%', unit: '' }));
+}
+</script>
+</body>
+</html>
